@@ -72,6 +72,11 @@ SPIClass hspi(HSPI);
 //-----------------------------------------
 #endif
 
+#define SAMPLING_SPEED 100  // in Hz
+
+unsigned long lastSampleTime = 0;
+const unsigned long interval = 1000 / SAMPLING_SPEED; // 1000ms / 100Hz = 10ms
+
 
 //Below a few examples of pin descriptions for different microcontrollers I used:
 ADS1256 A(2, ADS1256::PIN_UNUSED, 8, 10, 2.500, &USE_SPI); //DRDY, RESET, SYNC(PDWN), CS, VREF(float).    //Arduino Nano/Uno - OK
@@ -84,19 +89,12 @@ ADS1256 A(2, ADS1256::PIN_UNUSED, 8, 10, 2.500, &USE_SPI); //DRDY, RESET, SYNC(P
 //ADS1256 A(PA2, ADS1256::PIN_UNUSED, ADS1256::PIN_UNUSED, PA4, 2.500, &USE_SPI); //DRDY, RESET, SYNC(PDWN), CS, VREF(float). //STM32 "blue pill" - SPI1 - OK
 //ADS1256 A(PB10, PB11, ADS1256::PIN_UNUSED, PB12, 2.500, &USE_SPI);  // DRDY, RESET, SYNC, CS, VREF, SPI //STM32 "blue pill" - SPI2 - OK
 
-long rawConversion = 0;  //24-bit raw value
-float voltageValue = 0;  //human-readable floating point value
-
-int differentialChannels[4] = { DIFF_0_1, DIFF_2_3, DIFF_4_5, DIFF_6_7 };                         //Array to store the differential channels
-
 void setup() {
   Serial.begin(115200);  //The value does not matter if you use an MCU with native USB
 
   while (!Serial) {
     ;  //Wait until the serial becomes available
   }
-
-  Serial.println("ADS1256 - Custom Library Demo File by Curious Scientist - 2025-05-28");
 
 #if defined(ARDUINO_ARCH_RP2040)  //If RP2040 is used, we need to pass the SPI pins
   SPI.setSCK(SPI_SCK);
@@ -109,60 +107,44 @@ void setup() {
 #endif
 
   A.InitializeADC();  //See the documentation for every details
-  //Setting up CS, RESET, SYNC and SPI
-  //Assigning default values to: STATUS, MUX, ADCON, DRATE
-  //Performing a SYSCAL
 
-  //Below is a demonstration to change the values through the built-on functions of the library
-  //Set a PGA value
-  A.setPGA(PGA_64);  //0b00000000 - DEC: 0
-  //--------------------------------------------
-
+  A.setPGA(PGA_64);
   //Set input channels
-  A.setMUX(DIFF_6_7);  //0b01100111 - DEC: 103
-  //--------------------------------------------
-
+  A.setMUX(DIFF_6_7);
   //Set DRATE
-  A.setDRATE(DRATE_2000SPS);  //0b00010011 - DEC: 19
-  //--------------------------------------------
-
-  //Read back the above 3 values to check if the writing was succesful
-  Serial.print("PGA: ");
-  Serial.println(A.getPGA());
-  //--
-  Serial.print("MUX: ");
-  Serial.println(A.readRegister(MUX_REG));
-  //--
-  Serial.print("DRATE: ");
-  Serial.println(A.readRegister(DRATE_REG));
+  A.setDRATE(DRATE_2000SPS);
 }
 
 void loop() {
-  long data[4];
+  unsigned long currentTime = millis();
 
-  for (size_t i = 0; i < 3; i++)
-  {
-    data[i] = A.cycleDifferential();
-  }
-
-  for (size_t i = 0; i < 3; i++)
-  {
-    ADC_Packet myPacket;
+  if (currentTime - lastSampleTime >= interval) {
+    long data[4];
   
-    myPacket.header = 0xAA;
-    myPacket.channel = i; // You'll need to track which mux channel is active
-
-    long val = data[i];
+    for (size_t i = 0; i < 3; i++)
+    {
+      data[i] = A.cycleDifferential();
+    }
   
-    // Fill the struct using the raw buffer from your library
-    myPacket.data[0] = (val >> 16) & 0xFF; // MSB
-    myPacket.data[1] = (val >> 8) & 0xFF;  // Mid
-    myPacket.data[2] = val & 0xFF;         // LSB
+    for (size_t i = 0; i < 3; i++)
+    {
+      ADC_Packet myPacket;
+    
+      myPacket.header = 0xAA;
+      myPacket.channel = i; // You'll need to track which mux channel is active
   
-    // Calculate Checksum
-    myPacket.checksum = myPacket.header ^ myPacket.channel ^ 
-                      myPacket.data[0] ^ myPacket.data[1] ^ myPacket.data[2];
-  
-    Serial.write((uint8_t*)&myPacket, sizeof(myPacket));  
+      long val = data[i];
+    
+      // Fill the struct using the raw buffer from your library
+      myPacket.data[0] = (val >> 16) & 0xFF; // MSB
+      myPacket.data[1] = (val >> 8) & 0xFF;  // Mid
+      myPacket.data[2] = val & 0xFF;         // LSB
+    
+      // Calculate Checksum
+      myPacket.checksum = myPacket.header ^ myPacket.channel ^ 
+                        myPacket.data[0] ^ myPacket.data[1] ^ myPacket.data[2];
+    
+      Serial.write((uint8_t*)&myPacket, sizeof(myPacket));  
+    }
   }
 }
