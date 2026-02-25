@@ -76,6 +76,8 @@ SPIClass hspi(HSPI);
 #define SAMPLING_SPEED 100  // in Hz
 #define TIMEOUT_DURATION 1000 // in milliseconds
 
+#define RE_DE_PIN 3 // Pin to control the RE/DE of the RS485 transceiver
+
 unsigned long lastSampleTime = 0;
 const unsigned long interval = 1000000 / SAMPLING_SPEED; // 1_000_000us / 100Hz = 10ms
 
@@ -100,7 +102,9 @@ void sendPacket();
 
 
 void setup() {
-  Serial.begin(115200);  //The value does not matter if you use an MCU with native USB
+  Serial.begin(250000);  //The value does not matter if you use an MCU with native USB
+  pinMode(RE_DE_PIN, OUTPUT);
+  digitalWrite(RE_DE_PIN, LOW); // Set RE/DE low to enable reception by default
 
   while (!Serial) {
     ;  //Wait until the serial becomes available
@@ -161,6 +165,7 @@ void initADC() {
 }
 
 void sendPacket() {
+  digitalWrite(RE_DE_PIN, HIGH); // Set RE/DE high to enable transmission
   lastSampleTime += interval; // Schedule next sample time based on the previous one to maintain consistent intervals, even if there is some processing delay
 
   ADC_Packet frame;
@@ -184,4 +189,6 @@ void sendPacket() {
   frame.checksum = chk;
 
   Serial.write((uint8_t*)&frame, sizeof(frame));  // Send the entire frame as binary data
+  Serial.flush(); // Ensure all data is sent before proceeding
+  digitalWrite(RE_DE_PIN, LOW); // Set RE/DE low to enable reception
 }
