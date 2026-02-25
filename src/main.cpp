@@ -106,10 +106,6 @@ void setup() {
   pinMode(RE_DE_PIN, OUTPUT);
   digitalWrite(RE_DE_PIN, LOW); // Set RE/DE low to enable reception by default
 
-  while (!Serial) {
-    ;  //Wait until the serial becomes available
-  }
-
 #if defined(ARDUINO_ARCH_RP2040)  //If RP2040 is used, we need to pass the SPI pins
   SPI.setSCK(SPI_SCK);
   SPI.setTX(SPI_MOSI);
@@ -136,7 +132,7 @@ void loop() {
   }
 
   // Check for Timeout
-  if (millis() - lastHeartbeat > TIMEOUT_DURATION) {
+  if (millis() - lastHeartbeat > TIMEOUT_DURATION && currentState != SystemState::STOP) {
     currentState = SystemState::STOP;
     A.stopConversion();
   }
