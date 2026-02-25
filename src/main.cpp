@@ -3,6 +3,7 @@
 #include <ADS1256.h>
 
 #include <struct.h>
+#include <enums.h>
 
 
 //Platform-specific pin definitions
@@ -73,9 +74,14 @@ SPIClass hspi(HSPI);
 #endif
 
 #define SAMPLING_SPEED 100  // in Hz
+#define TIMEOUT_DURATION 1000 // in milliseconds
 
 unsigned long lastSampleTime = 0;
 const unsigned long interval = 1000000 / SAMPLING_SPEED; // 1_000_000us / 100Hz = 10ms
+
+unsigned long lastHeartbeat = 0;
+
+SystemState currentState = SystemState::STOP;
 
 
 //Below a few examples of pin descriptions for different microcontrollers I used:
@@ -88,6 +94,10 @@ ADS1256 A(2, ADS1256::PIN_UNUSED, 8, 10, 2.500, &USE_SPI); //DRDY, RESET, SYNC(P
 //ADS1256 A(15, ADS1256::PIN_UNUSED, 14, 17, 2.500, &USE_SPI);  //DRDY, RESET, SYNC(PDWN), CS, VREF(float), SPI bus.  //RP2040 Pico W - OK
 //ADS1256 A(PA2, ADS1256::PIN_UNUSED, ADS1256::PIN_UNUSED, PA4, 2.500, &USE_SPI); //DRDY, RESET, SYNC(PDWN), CS, VREF(float). //STM32 "blue pill" - SPI1 - OK
 //ADS1256 A(PB10, PB11, ADS1256::PIN_UNUSED, PB12, 2.500, &USE_SPI);  // DRDY, RESET, SYNC, CS, VREF, SPI //STM32 "blue pill" - SPI2 - OK
+
+void initADC();
+void sendPacket();
+
 
 void setup() {
   Serial.begin(115200);  //The value does not matter if you use an MCU with native USB
@@ -106,6 +116,41 @@ void setup() {
   hspi.begin(14, 25, 13);  //SCK, MISO (safe), MOSI
 #endif
 
+  initADC();
+}
+
+void loop() {
+  // Check for Heartbeat
+  if (Serial.available() > 0) {
+    while(Serial.available()) Serial.read(); // Clear buffer
+    lastHeartbeat = millis();
+
+    if (currentState == SystemState::STOP) {
+      lastSampleTime = micros();
+      currentState = SystemState::STREAMING;
+    }
+  }
+
+  // Check for Timeout
+  if (millis() - lastHeartbeat > TIMEOUT_DURATION) {
+    currentState = SystemState::STOP;
+    A.stopConversion();
+  }
+
+  // Sampling and Streaming
+  if (currentState == SystemState::STREAMING) {
+    unsigned long currentTime = micros();
+    // Use >= to handle potential slight jitter
+    if (currentTime - lastSampleTime >= interval) {
+      sendPacket();
+    }
+  } else {
+    // We are in STOP. Maybe blink an LED to show "Waiting for PC" ?
+    digitalWrite(LED_BUILTIN, (millis() / 500) % 2); 
+  }
+}
+
+void initADC() {
   A.InitializeADC();  //See the documentation for every details
 
   A.setPGA(PGA_64);
@@ -115,31 +160,28 @@ void setup() {
   A.setDRATE(DRATE_2000SPS);
 }
 
-void loop() {
-  unsigned long currentTime = micros();
+void sendPacket() {
+  lastSampleTime += interval; // Schedule next sample time based on the previous one to maintain consistent intervals, even if there is some processing delay
 
-  if (currentTime - lastSampleTime >= interval) {
-    lastSampleTime += interval;
+  ADC_Packet frame;
 
-    ADC_Packet frame;
-
-    frame.header1 = 0xAA;
-    frame.header2 = 0xBB;
-    
-    frame.ch0 = A.cycleDifferential();
-    frame.ch1 = A.cycleDifferential();
-    frame.ch2 = A.cycleDifferential();
-    A.cycleDifferential(); // we don't need the last channel
-
-    // Calculate Checksum
-    uint8_t* ptr = (uint8_t*)&frame;
-    uint8_t chk = 0;
-    // XOR everything except the last byte (the checksum itself)
-    for(size_t i=0; i < sizeof(ADC_Packet) - 1; i++) {
-        chk ^= ptr[i];
-    }
-    frame.checksum = chk;
+  frame.header1 = 0xAA;
+  frame.header2 = 0xBB;
   
-    Serial.write((uint8_t*)&frame, sizeof(frame));  
+  frame.ch0 = A.cycleDifferential();
+  frame.ch1 = A.cycleDifferential();
+  frame.ch2 = A.cycleDifferential();
+  A.cycleDifferential(); // we don't need the last channel but we need to call it to update the MUX for the next cycle
+
+  // Calculate Checksum
+  uint8_t* ptr = (uint8_t*)&frame;
+  uint8_t chk = 0;
+
+  // XOR everything except the last byte (the checksum itself)
+  for(size_t i=0; i < sizeof(ADC_Packet) - 1; i++) {
+      chk ^= ptr[i];
   }
+  frame.checksum = chk;
+
+  Serial.write((uint8_t*)&frame, sizeof(frame));  // Send the entire frame as binary data
 }
