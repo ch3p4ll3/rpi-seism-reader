@@ -75,7 +75,7 @@ SPIClass hspi(HSPI);
 #define SAMPLING_SPEED 100  // in Hz
 
 unsigned long lastSampleTime = 0;
-const unsigned long interval = 1000 / SAMPLING_SPEED; // 1000ms / 100Hz = 10ms
+const unsigned long interval = 1000000 / SAMPLING_SPEED; // 1_000_000us / 100Hz = 10ms
 
 
 //Below a few examples of pin descriptions for different microcontrollers I used:
@@ -116,35 +116,30 @@ void setup() {
 }
 
 void loop() {
-  unsigned long currentTime = millis();
+  unsigned long currentTime = micros();
 
   if (currentTime - lastSampleTime >= interval) {
-    long data[4];
-  
-    for (size_t i = 0; i < 3; i++)
-    {
-      data[i] = A.cycleDifferential();
+    lastSampleTime += interval;
+
+    ADC_Packet frame;
+
+    frame.header1 = 0xAA;
+    frame.header2 = 0xBB;
+    
+    frame.ch0 = A.cycleDifferential();
+    frame.ch1 = A.cycleDifferential();
+    frame.ch2 = A.cycleDifferential();
+    A.cycleDifferential(); // we don't need the last channel
+
+    // Calculate Checksum
+    uint8_t* ptr = (uint8_t*)&frame;
+    uint8_t chk = 0;
+    // XOR everything except the last byte (the checksum itself)
+    for(size_t i=0; i < sizeof(ADC_Packet) - 1; i++) {
+        chk ^= ptr[i];
     }
+    frame.checksum = chk;
   
-    for (size_t i = 0; i < 3; i++)
-    {
-      ADC_Packet myPacket;
-    
-      myPacket.header = 0xAA;
-      myPacket.channel = i; // You'll need to track which mux channel is active
-  
-      long val = data[i];
-    
-      // Fill the struct using the raw buffer from your library
-      myPacket.data[0] = (val >> 16) & 0xFF; // MSB
-      myPacket.data[1] = (val >> 8) & 0xFF;  // Mid
-      myPacket.data[2] = val & 0xFF;         // LSB
-    
-      // Calculate Checksum
-      myPacket.checksum = myPacket.header ^ myPacket.channel ^ 
-                        myPacket.data[0] ^ myPacket.data[1] ^ myPacket.data[2];
-    
-      Serial.write((uint8_t*)&myPacket, sizeof(myPacket));  
-    }
+    Serial.write((uint8_t*)&frame, sizeof(frame));  
   }
 }
