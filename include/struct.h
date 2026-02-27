@@ -8,3 +8,12 @@ struct __attribute__((__packed__)) ADC_Packet {
     int32_t ch2;
     uint8_t checksum;
 };
+
+
+struct __attribute__((__packed__)) SettingsPacket {
+    uint8_t header1 = 0xCC;
+    uint8_t header2 = 0xDD;
+    uint16_t samplingSpeed;
+    uint8_t ADCGain;
+    uint8_t ADCDataRate;
+};
