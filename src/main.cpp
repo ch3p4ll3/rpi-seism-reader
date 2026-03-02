@@ -73,17 +73,47 @@ SPIClass hspi(HSPI);
 //-----------------------------------------
 #endif
 
+// default settings
 #define SAMPLING_SPEED 100  // in Hz
 #define TIMEOUT_DURATION 1000 // in milliseconds
 
 #define RE_DE_PIN 3 // Pin to control the RE/DE of the RS485 transceiver
 
 unsigned long lastSampleTime = 0;
-const unsigned long interval = 1000000 / SAMPLING_SPEED; // 1_000_000us / 100Hz = 10ms
+unsigned long interval = 1000000 / SAMPLING_SPEED; // 1_000_000us / 100Hz = 10ms
 
 unsigned long lastHeartbeat = 0;
 
 SystemState currentState = SystemState::STOP;
+
+uint8_t PGASettings[7] = {
+  PGA_1,
+  PGA_2,
+  PGA_4,
+  PGA_8,
+  PGA_16,
+  PGA_32,
+  PGA_64
+};
+
+uint8_t DataRateSettings[16] = {
+  DRATE_2SPS,
+  DRATE_5SPS,
+  DRATE_10SPS,
+  DRATE_15SPS,
+  DRATE_25SPS,
+  DRATE_30SPS,
+  DRATE_50SPS,
+  DRATE_60SPS,
+  DRATE_100SPS,
+  DRATE_500SPS,
+  DRATE_1000SPS,
+  DRATE_2000SPS,
+  DRATE_3750SPS,
+  DRATE_7500SPS,
+  DRATE_15000SPS,
+  DRATE_30000SPS
+};
 
 
 //Below a few examples of pin descriptions for different microcontrollers I used:
@@ -97,7 +127,9 @@ ADS1256 A(2, ADS1256::PIN_UNUSED, 8, 10, 2.500, &USE_SPI); //DRDY, RESET, SYNC(P
 //ADS1256 A(PA2, ADS1256::PIN_UNUSED, ADS1256::PIN_UNUSED, PA4, 2.500, &USE_SPI); //DRDY, RESET, SYNC(PDWN), CS, VREF(float). //STM32 "blue pill" - SPI1 - OK
 //ADS1256 A(PB10, PB11, ADS1256::PIN_UNUSED, PB12, 2.500, &USE_SPI);  // DRDY, RESET, SYNC, CS, VREF, SPI //STM32 "blue pill" - SPI2 - OK
 
-void initADC();
+void initADC(SettingsPacket *s);
+void getSettings();
+void validateSettings(SettingsPacket *s);
 void sendPacket();
 
 
@@ -116,7 +148,7 @@ void setup() {
   hspi.begin(14, 25, 13);  //SCK, MISO (safe), MOSI
 #endif
 
-  initADC();
+  getSettings();
 }
 
 void loop() {
@@ -150,14 +182,58 @@ void loop() {
   }
 }
 
-void initADC() {
+void initADC(SettingsPacket *s) {
   A.InitializeADC();  //See the documentation for every details
 
-  A.setPGA(PGA_64);
-  //Set input channels
-  A.setMUX(DIFF_6_7);
+  // Set PGA
+  A.setPGA(PGASettings[s->ADCGain]);
   //Set DRATE
-  A.setDRATE(DRATE_2000SPS);
+  A.setDRATE(DataRateSettings[s->ADCDataRate]);
+}
+
+void getSettings() {
+  bool settingsReceived = false;
+  SettingsPacket incomingSettings;
+
+  while (!settingsReceived) {
+    if (Serial.available() >= sizeof(SettingsPacket)) {
+      if (Serial.peek() == 0xCC) {
+        Serial.readBytes((uint8_t*)&incomingSettings, sizeof(SettingsPacket));
+
+        if (incomingSettings.header1 == 0xCC && incomingSettings.header2 == 0xDD) {
+          // Validate and apply settings
+          validateSettings(&incomingSettings);
+          // Respond with the same structure for verification
+          digitalWrite(RE_DE_PIN, HIGH); // MCU Transmit Mode
+          Serial.write((uint8_t*)&incomingSettings, sizeof(incomingSettings));
+          Serial.flush();
+          digitalWrite(RE_DE_PIN, LOW);  // MCU Listen Mode
+          
+          settingsReceived = true;
+        }
+      } else {
+        Serial.read(); // Discard garbage
+      }
+    }
+  }
+}
+
+void validateSettings(SettingsPacket *s){
+  if (s->samplingSpeed > 0) {
+    interval = 1000000UL / s->samplingSpeed; 
+  }
+
+  // Update ADC Gain Index (Validate range 0-6)
+  if (s->ADCGain > 6) {
+    s->ADCGain = 6; // Default to index 6 (PGA_64)
+  }
+
+  // Update Data Rate Index (Validate range 0-15)
+  if (s->ADCDataRate > 15) {
+    s->ADCDataRate = 11; // Default to index 14 (2000SPS)
+  }
+
+  initADC(s);
 }
 
 void sendPacket() {
